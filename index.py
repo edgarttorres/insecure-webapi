@@ -9,6 +9,7 @@ from pathlib import Path
 from bottle import route, run, template, post, request, static_file
 import bcrypt
 import secrets
+from werkzeug.utils import secure_filename
 
 def loadDatabaseSettings(pathjs):
 	pathjs = Path(pathjs)
@@ -213,7 +214,11 @@ def Imagen():
 			cursor.execute('UPDATE Imagen SET ruta = %s WHERE id = %s',(f"img/{idImagen}.{request.json['ext']}", idImagen));
 			db.commit()
 			# Mover archivo a su nueva locacion
-			shutil.move('tmp/'+str(id_Usuario),'img/'+str(idImagen)+'.'+str(request.json['ext']))
+			ruta_destino = f'img/{idImagen}.{request.json["ext"]}'
+			# Validar que no haya path traversal
+			if '..' in ruta_destino or not ruta_destino.startswith('img/'):
+				return {"R": -1, "error": "Ruta de destino inválida"}
+			shutil.move(f'tmp/{id_Usuario}', ruta_destino)
 			return {"R":0,"D":idImagen}
 	except Exception as e: 
 		print(e)
@@ -271,7 +276,6 @@ def Descargar():
 	
 	
 	# Buscar imagen y enviarla
-	
 	try:
 		with db.cursor() as cursor:
 			cursor.execute('SELECT name, ruta FROM Imagen WHERE id = %s', (idImagen,));
@@ -280,8 +284,16 @@ def Descargar():
 		print(e)
 		db.close()
 		return {"R":-3}
-	print(Path("img").resolve(),R[0][1])
-	return static_file(R[0][1],Path(".").resolve())
+	ruta_archivo = R[0][1]  # Ej: "img/123.png"
+
+	# Prevenir Path Traversal
+	ruta_segura = Path("img") / secure_filename(Path(ruta_archivo).name)
+
+	# Verificar que el archivo exista y esté en directorio permitido
+	if not ruta_segura.exists() or ".." in str(ruta_segura) or not str(ruta_segura).startswith("img/"):
+		return {"R": -1, "error": "Archivo no encontrado"}
+
+	return static_file(str(ruta_segura), root=Path(".").resolve())
 
 if __name__ == '__main__':
     run(
