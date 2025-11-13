@@ -134,7 +134,7 @@ def Login():
 	try:
 		with db.cursor() as cursor:
 			cursor.execute('DELETE FROM AccesoToken WHERE id_Usuario = %s', (R[0][0],));
-			cursor.execute('INSERT INTO AccesoToken VALUES (%s, %s, NOW())', (R[0][0], T));
+			cursor.execute('INSERT INTO AccesoToken VALUES (%s, %s, NOW(), DATE_ADD(NOW(), INTERVAL 1 HOUR))', (R[0][0], T));
 			db.commit()
 			db.close()
 			return {"R":0,"D":T}
@@ -190,7 +190,7 @@ def Imagen():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			cursor.execute('SELECT id_Usuario FROM AccesoToken WHERE token = %s', (TKN,));
+			cursor.execute('SELECT id_Usuario FROM AccesoToken WHERE token = %s AND expira > NOW()', (TKN,));
 			R = cursor.fetchall()
 	except Exception as e: 
 		print(e)
@@ -240,60 +240,69 @@ def Imagen():
 
 @post('/Descargar')
 def Descargar():
-	dbcnf = loadDatabaseSettings('db.json');
-	db = mysql.connector.connect(
-		host='localhost', port = dbcnf['port'],
-		database = dbcnf['dbname'],
-		user = dbcnf['user'],
-		password = dbcnf['password']
-	)
-	
-	
-	###/ obtener el cuerpo de la peticion
-	if not request.json:
-		return {"R":-1}
-	######/
-	R = 'token' in request.json and 'id' in request.json  
-	# TODO checar si estan vacio los elementos del json
-	if not R:
-		return {"R":-1}
-	
-	# TODO validar correo en json
-	# Comprobar que el usuario sea valido
-	TKN = request.json['token'];
-	idImagen = request.json['id'];
-	
-	R = False
-	try:
-		with db.cursor() as cursor:
-			cursor.execute('SELECT id_Usuario FROM AccesoToken WHERE token = %s', (TKN,));
-			R = cursor.fetchall()
-	except Exception as e: 
-		print(e)
-		db.close()
-		return {"R":-2}
-		
-	
-	
-	# Buscar imagen y enviarla
-	try:
-		with db.cursor() as cursor:
-			cursor.execute('SELECT name, ruta FROM Imagen WHERE id = %s', (idImagen,));
-			R = cursor.fetchall()
-	except Exception as e: 
-		print(e)
-		db.close()
-		return {"R":-3}
-	ruta_archivo = R[0][1]  # Ej: "img/123.png"
-
-	# Prevenir Path Traversal
-	ruta_segura = Path("img") / secure_filename(Path(ruta_archivo).name)
-
-	# Verificar que el archivo exista y esté en directorio permitido
-	if not ruta_segura.exists() or ".." in str(ruta_segura) or not str(ruta_segura).startswith("img/"):
-		return {"R": -1, "error": "Archivo no encontrado"}
-
-	return static_file(str(ruta_segura), root=Path(".").resolve())
+    dbcnf = loadDatabaseSettings('db.json')
+    db = mysql.connector.connect(
+        host='localhost', port=dbcnf['port'],
+        database=dbcnf['dbname'],
+        user=dbcnf['user'],
+        password=dbcnf['password']
+    )
+    
+    if not request.json:
+        return {"R": -1}
+    
+    R = 'token' in request.json and 'id' in request.json  
+    if not R:
+        return {"R": -1}
+    
+    TKN = request.json['token']
+    idImagen = request.json['id']
+    
+    # Validar token y obtener ID de usuario
+    try:
+        with db.cursor() as cursor:
+            cursor.execute('SELECT id_Usuario FROM AccesoToken WHERE token = %s AND expira > NOW()', (TKN,));
+            R = cursor.fetchall()
+    except Exception as e: 
+        print(e)
+        db.close()
+        return {"R": -2}
+    
+    if not R:
+        db.close()
+        return {"R": -2, "error": "Token inválido"}
+    
+    id_usuario = R[0][0]
+    
+    # VERIFICACIÓN CRÍTICA: ¿Pertenece esta imagen al usuario?
+    try:
+        with db.cursor() as cursor:
+            cursor.execute('''
+                SELECT name, ruta 
+                FROM Imagen 
+                WHERE id = %s AND id_Usuario = %s
+            ''', (idImagen, id_usuario));
+            R = cursor.fetchall()
+    except Exception as e: 
+        print(e)
+        db.close()
+        return {"R": -3}
+    
+    if not R:
+        db.close()
+        return {"R": -3, "error": "Imagen no encontrada o sin permisos"}
+    
+    # Path traversal protection
+    ruta_archivo = R[0][1]
+    if not ruta_archivo.startswith('img/') or '..' in ruta_archivo:
+        return {"R": -1, "error": "Ruta de archivo inválida"}
+    
+    ruta_completa = Path(ruta_archivo)
+    if not ruta_completa.exists():
+        return {"R": -1, "error": "Archivo no encontrado"}
+    
+    db.close()
+    return static_file(str(ruta_completa), root=Path(".").resolve())
 
 if __name__ == '__main__':
     run(
