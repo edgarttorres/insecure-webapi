@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from bottle import route, run, template, post, request, static_file
-
+import bcrypt
 
 
 def loadDatabaseSettings(pathjs):
@@ -73,7 +73,8 @@ def Registro():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			cursor.execute('INSERT INTO Usuario VALUES (null, %s, %s, md5(%s))',(request.json["uname"], request.json["email"], request.json["password"]));
+			hashed_password = bcrypt.hashpw(request.json["password"].encode('utf-8'), bcrypt.gensalt())
+			cursor.execute('INSERT INTO Usuario VALUES (null, %s, %s, %s)',(request.json["uname"], request.json["email"], hashed_password));
 			R = cursor.lastrowid
 			db.commit()
 		db.close()
@@ -121,16 +122,16 @@ def Login():
 	R = False
 	try:
 		with db.cursor() as cursor:
-			print('SELECT id FROM Usuario WHERE uname = %s AND password = md5(%s)')
-			cursor.execute('SELECT id FROM Usuario WHERE uname = %s AND password = md5(%s)',(request.json["uname"], request.json["password"]));
+			print('SELECT id, password FROM Usuario WHERE uname = %s')
+			cursor.execute('SELECT id, password FROM Usuario WHERE uname = %s', (request.json["uname"],));
 			R = cursor.fetchall()
 	except Exception as e: 
 		print(e)
 		db.close()
 		return {"R":-2}
 	
-	
-	if not R:
+	# Verificar password con bcrypt
+	if not R or not bcrypt.checkpw(request.json["password"].encode('utf-8'), R[0][1].encode('utf-8')):
 		db.close()
 		return {"R":-3}
 	
@@ -139,7 +140,6 @@ def Login():
 	with open("/tmp/log","a") as log:
 		log.write(f'Delete from AccesoToken where id_Usuario = "{R[0][0]}"\n')
 		log.write(f'insert into AccesoToken values({R[0][0]},"{T}",now())\n')
-	
 	
 	try:
 		with db.cursor() as cursor:
